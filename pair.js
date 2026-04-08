@@ -52,8 +52,8 @@ const config = {
 
 // ---------------- MONGO SETUP ----------------
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://gunathilakalayanal56_db_user:mI7a7iSgYkgVbcuX@cluster0.wcwukox.mongodb.net/';
-const MONGO_DB = process.env.MONGO_DB || 'KAVINDU_MD_ISHAN'
+const MONGO_URI = "mongodb+srv://404_XMD:254wesongA@cluster0.kycumtr.mongodb.net/404_XMD?retryWrites=true&w=majority";
+const MONGO_DB = "nuch1";
 let mongoClient, mongoDB;
 let sessionsCol, numbersCol, adminsCol, newsletterCol, configsCol, newsletterReactsCol;
 
