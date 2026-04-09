@@ -53,7 +53,7 @@ const config = {
 // ---------------- MONGO SETUP ----------------
 
 const MONGO_URI = "mongodb+srv://404_XMD:254wesongA@cluster0.kycumtr.mongodb.net/404_XMD?retryWrites=true&w=majority";
-const MONGO_DB = "nuch1";
+const MONGO_DB = "nuch2";
 let mongoClient, mongoDB;
 let sessionsCol, numbersCol, adminsCol, newsletterCol, configsCol, newsletterReactsCol;
 
