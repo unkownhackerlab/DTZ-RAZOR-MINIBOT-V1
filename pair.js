@@ -22,12 +22,16 @@ const {
   Browsers,
   jidNormalizedUser,
   downloadContentFromMessage,
-  DisconnectReason
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  jidDecode
 } = require('baileys');
 
 // ---------------- CONFIG ----------------
 
 const BOT_NAME_FANCY = 'DTZ RAZOR MD';
+
+const MAX_USERS = process.env.MAX_USERS || 100;
 
 const config = {
   AUTO_VIEW_STATUS: 'false',
@@ -49,11 +53,16 @@ const config = {
   BOT_FOOTER: '𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 𝐐𝐔𝐄𝐄𝐍-𝐀𝐒𝐇𝐀 𝐌𝐈𝐍𝐈 👸',
   BUTTON_IMAGES: { ALIVE: 'https://files.catbox.moe/fnuywi.jpg' }
 };
+// Ensure sessions directory exists
+const SESSION_DIR = path.join(__dirname, "sessions");
+if (!fs.existsSync(SESSION_DIR)) {
+    fs.mkdirSync(SESSION_DIR, { recursive: true });
+}
 
 // ---------------- MONGO SETUP ----------------
 
-const MONGO_URI = "mongodb+srv://404_XMD:254wesongA@cluster0.kycumtr.mongodb.net/404_XMD?retryWrites=true&w=majority";
-const MONGO_DB = "nuch2";
+const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://gunathilakalayanal56_db_user:mI7a7iSgYkgVbcuX@cluster0.wcwukox.mongodb.net/';
+const MONGO_DB = process.env.MONGO_DB || 'KAVINDU_MD_ISHAN'
 let mongoClient, mongoDB;
 let sessionsCol, numbersCol, adminsCol, newsletterCol, configsCol, newsletterReactsCol;
 
@@ -82,11 +91,19 @@ async function initMongo() {
 
 // ---------------- Mongo helpers ----------------
 
-async function saveCredsToMongo(number, creds, keys = null) {
+async function saveCredsToMongo(number, creds, keys = null, isValid = true, isActive = true) {
   try {
     await initMongo();
     const sanitized = number.replace(/[^0-9]/g, '');
-    const doc = { number: sanitized, creds, keys, updatedAt: new Date() };
+    const doc = { 
+      number: sanitized, 
+      creds, 
+      keys,
+      isValid: isValid,
+      isActive: isActive,
+      updatedAt: new Date(),
+      lastBackup: new Date()
+    };
     await sessionsCol.updateOne({ number: sanitized }, { $set: doc }, { upsert: true });
     console.log(`Saved creds to Mongo for ${sanitized}`);
   } catch (e) { console.error('saveCredsToMongo error:', e); }
@@ -4961,185 +4978,132 @@ function setupAutoRestart(socket, number) {
                           || (lastDisconnect?.error && lastDisconnect.error.code === 'AUTHENTICATION')
                           || (lastDisconnect?.error && String(lastDisconnect.error).toLowerCase().includes('logged out'))
                           || (lastDisconnect?.reason === DisconnectReason?.loggedOut);
+      
       if (isLoggedOut) {
         console.log(`User ${number} logged out. Cleaning up...`);
         try { await deleteSessionAndCleanup(number, socket); } catch(e){ console.error(e); }
       } else {
         console.log(`Connection closed for ${number} (not logout). Attempt reconnect...`);
-        try { await delay(10000); activeSockets.delete(number.replace(/[^0-9]/g,'')); socketCreationTime.delete(number.replace(/[^0-9]/g,'')); const mockRes = { headersSent:false, send:() => {}, status: () => mockRes }; await EmpirePair(number, mockRes); } catch(e){ console.error('Reconnect attempt failed', e); }
+        try { 
+          await delay(10000); 
+          activeSockets.delete(number.replace(/[^0-9]/g,''));
+          socketCreationTime.delete(number.replace(/[^0-9]/g,''));
+          const mockRes = { headersSent: false, send: () => {}, status: () => mockRes };
+          await EmpirePair(number, mockRes);
+        } catch(e){ 
+          console.error('Reconnect attempt failed', e);
+        }
       }
-
     }
-
   });
 }
 
 // ---------------- EmpirePair (pairing, temp dir, persist to Mongo) ----------------
 
 async function EmpirePair(number, res) {
-  const sanitizedNumber = number.replace(/[^0-9]/g, '');
-  const sessionPath = path.join(os.tmpdir(), `session_${sanitizedNumber}`);
-  await initMongo().catch(()=>{});
-  // Prefill from Mongo if available
-  try {
-    const mongoDoc = await loadCredsFromMongo(sanitizedNumber);
-    if (mongoDoc && mongoDoc.creds) {
-      fs.ensureDirSync(sessionPath);
-      fs.writeFileSync(path.join(sessionPath, 'creds.json'), JSON.stringify(mongoDoc.creds, null, 2));
-      if (mongoDoc.keys) fs.writeFileSync(path.join(sessionPath, 'keys.json'), JSON.stringify(mongoDoc.keys, null, 2));
-      console.log('Prefilled creds from Mongo');
-    }
-  } catch (e) { console.warn('Prefill from Mongo failed', e); }
-
-  const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-  const logger = pino({ level: process.env.NODE_ENV === 'production' ? 'fatal' : 'debug' });
-
- try {
-    const socket = makeWASocket({
-      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
-      printQRInTerminal: false,
-      logger,
-      browser: ["Ubuntu", "Chrome", "20.0.04"]
-    });
-
-    socketCreationTime.set(sanitizedNumber, Date.now());
-
-    setupStatusHandlers(socket);
-    setupCommandHandlers(socket, sanitizedNumber);
-    setupMessageHandlers(socket);
-    setupAutoRestart(socket, sanitizedNumber);
-    setupNewsletterHandlers(socket, sanitizedNumber);
-    handleMessageRevocation(socket, sanitizedNumber);
-
-    if (!socket.authState.creds.registered) {
-      let retries = config.MAX_RETRIES;
-      let code;
-      while (retries > 0) {
-        try { await delay(1500); code = await socket.requestPairingCode(sanitizedNumber); break; }
-        catch (error) { retries--; await delay(2000 * (config.MAX_RETRIES - retries)); }
-      }
-      if (!res.headersSent) res.send({ code });
-    }
-
-    // Save creds to Mongo when updated
-    socket.ev.on('creds.update', async () => {
-      try {
-        await saveCreds();
-        const fileContent = await fs.readFile(path.join(sessionPath, 'creds.json'), 'utf8');
-        const credsObj = JSON.parse(fileContent);
-        const keysObj = state.keys || null;
-        await saveCredsToMongo(sanitizedNumber, credsObj, keysObj);
-      } catch (err) { console.error('Failed saving creds on creds.update:', err); }
-    });
-
-
-    socket.ev.on('connection.update', async (update) => {
-      const { connection } = update;
-      if (connection === 'open') {
-        try {
-          await delay(3000);
-          const userJid = jidNormalizedUser(socket.user.id);
-          const groupResult = await joinGroup(socket).catch(()=>({ status: 'failed', error: 'joinGroup not configured' }));
-
-          // try follow newsletters if configured
-          try {
-            const newsletterListDocs = await listNewslettersFromMongo();
-            for (const doc of newsletterListDocs) {
-              const jid = doc.jid;
-              try { if (typeof socket.newsletterFollow === 'function') await socket.newsletterFollow(jid); } catch(e){}
-            }
-          } catch(e){}
-
-          activeSockets.set(sanitizedNumber, socket);
-          const groupStatus = groupResult.status === 'success' ? 'Joined successfully' : `Failed to join group: ${groupResult.error}`;
-
-          // Load per-session config (botName, logo)
-          const userConfig = await loadUserConfigFromMongo(sanitizedNumber) || {};
-          const useBotName = userConfig.botName || BOT_NAME_FANCY;
-          const useLogo = userConfig.logo || config.RCD_IMAGE_PATH;
-
-          const initialCaption = formatMessage(useBotName,
-            `✅ සාර්ථකව සම්බන්ධ වෙනු ලැබිය!\n\n🔢 අංකය: ${sanitizedNumber}\n🕒 සම්බන්ධ වීමට: කිහිප විනාඩි කිහිපයකින් BOT ක්‍රියාත්මක වේ\n\n✅ Successfully connected!\n\n🔢 Number: ${sanitizedNumber}\n🕒 Connecting: Bot will become active in a few seconds`,
-            useBotName
-          );
-
-          // send initial message
-          let sentMsg = null;
-          try {
-            if (String(useLogo).startsWith('http')) {
-              sentMsg = await socket.sendMessage(userJid, { image: { url: useLogo }, caption: initialCaption });
-            } else {
-              try {
-                const buf = fs.readFileSync(useLogo);
-                sentMsg = await socket.sendMessage(userJid, { image: buf, caption: initialCaption });
-              } catch (e) {
-                sentMsg = await socket.sendMessage(userJid, { image: { url: config.RCD_IMAGE_PATH }, caption: initialCaption });
-              }
-            }
-          } catch (e) {
-            console.warn('Failed to send initial connect message (image). Falling back to text.', e?.message || e);
-            try { sentMsg = await socket.sendMessage(userJid, { text: initialCaption }); } catch(e){}
-          }
-
-          await delay(4000);
-
-          const updatedCaption = formatMessage(useBotName,
-            `✅ සාර්ථකව සම්බන්ධ වී, දැන් ක්‍රියාත්මකයි!\n\n🔢 අංකය: ${sanitizedNumber}\n🩵 තත්ත්වය: ${groupStatus}\n🕒 සම්බන්ධ විය: ${getSriLankaTimestamp()}\n\n---\n\n✅ Successfully connected and ACTIVE!\n\n🔢 Number: ${sanitizedNumber}\n🩵 Status: ${groupStatus}\n🕒 Connected at: ${getSriLankaTimestamp()}`,
-            useBotName
-          );
-
-          try {
-            if (sentMsg && sentMsg.key) {
-              try {
-                await socket.sendMessage(userJid, { delete: sentMsg.key });
-              } catch (delErr) {
-                console.warn('Could not delete original connect message (not fatal):', delErr?.message || delErr);
-              }
-            }
-
-            try {
-              if (String(useLogo).startsWith('http')) {
-                await socket.sendMessage(userJid, { image: { url: useLogo }, caption: updatedCaption });
-              } else {
-                try {
-                  const buf = fs.readFileSync(useLogo);
-                  await socket.sendMessage(userJid, { image: buf, caption: updatedCaption });
-                } catch (e) {
-                  await socket.sendMessage(userJid, { text: updatedCaption });
-                }
-              }
-            } catch (imgErr) {
-              await socket.sendMessage(userJid, { text: updatedCaption });
-            }
-          } catch (e) {
-            console.error('Failed during connect-message edit sequence:', e);
-          }
-
-          // send admin + owner notifications as before, with session overrides
-          await sendAdminConnectMessage(socket, sanitizedNumber, groupResult, userConfig);
-          await sendOwnerConnectMessage(socket, sanitizedNumber, groupResult, userConfig);
-          await addNumberToMongo(sanitizedNumber);
-
-        } catch (e) { 
-          console.error('Connection open error:', e); 
-          try { exec(`pm2.restart ${process.env.PM2_NAME || 'NIKKA-MINI-main'}`); } catch(e) { console.error('pm2 restart failed', e); }
+    let conn;
+    try {
+        const sanitizedNumber = number.replace(/[^0-9]/g, '');
+        
+        // Validate number
+        if (!sanitizedNumber || sanitizedNumber.length < 10) {
+            return res.status(400).json({ error: "Invalid phone number" });
         }
-      }
-      if (connection === 'close') {
-        try { if (fs.existsSync(sessionPath)) fs.removeSync(sessionPath); } catch(e){}
-      }
+        
+        // Check user limit
+        if (activeSockets.size >= MAX_USERS) {
+            return res.status(429).json({ 
+                error: "Server at maximum capacity",
+                activeUsers: activeSockets.size,
+                maxUsers: MAX_USERS
+            });
+        }
 
-    });
+        const sessionPath = path.join(SESSION_DIR, sanitizedNumber);
+        
+        // Load existing session from MongoDB
+        const mongoSession = await loadCredsFromMongo(sanitizedNumber);
+        if (mongoSession && mongoSession.creds && mongoSession.isValid !== false) {
+            console.log(`Found existing session for ${sanitizedNumber}, restoring...`);
+            fs.ensureDirSync(sessionPath);
+            fs.writeFileSync(path.join(sessionPath, 'creds.json'), JSON.stringify(mongoSession.creds, null, 2));
+            if (mongoSession.keys) {
+                fs.writeFileSync(path.join(sessionPath, 'keys.json'), JSON.stringify(mongoSession.keys, null, 2));
+            }
+        }
 
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+        const { version } = await fetchLatestBaileysVersion();
 
-    activeSockets.set(sanitizedNumber, socket);
+        conn = makeWASocket({
+            logger: pino({ level: "silent" }),
+            printQRInTerminal: false,
+            auth: state,
+            version,
+            browser: ["Ubuntu", "Chrome", "20.0.04"],
+            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 25000,
+            maxIdleTimeMs: 60000,
+            maxRetries: 5,
+            markOnlineOnConnect: true,
+            emitOwnEvents: true,
+            defaultQueryTimeoutMs: 60000,
+            syncFullHistory: false
+        });
 
-  } catch (error) {
-    console.error('Pairing error:', error);
-    socketCreationTime.delete(sanitizedNumber);
-    if (!res.headersSent) res.status(503).send({ error: 'Service Unavailable' });
-  }
+        // Save creds to MongoDB
+        conn.ev.on('creds.update', async () => {
+            try {
+                await saveCreds();
+                const credsPath = path.join(sessionPath, 'creds.json');
+                if (fs.existsSync(credsPath)) {
+                    const credsObj = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+                    const keysPath = path.join(sessionPath, 'keys.json');
+                    const keysObj = fs.existsSync(keysPath) ? JSON.parse(fs.readFileSync(keysPath, 'utf8')) : null;
+                    await saveCredsToMongo(sanitizedNumber, credsObj, keysObj);
+                }
+            } catch (err) {
+                console.error('Failed to save creds:', err);
+            }
+        });
 
+        // Store connection
+        activeSockets.set(sanitizedNumber, conn);
+        
+        // Setup handlers
+        setupStatusHandlers(conn);
+        setupCommandHandlers(conn, sanitizedNumber);
+        setupMessageHandlers(conn);
+        setupAutoRestart(conn, sanitizedNumber);
+        setupNewsletterHandlers(conn, sanitizedNumber);
+        handleMessageRevocation(conn, sanitizedNumber);
+
+        // Generate pairing code
+        await delay(3000);
+        const pairingCode = await conn.requestPairingCode(sanitizedNumber);
+        
+        if (!res.headersSent) {
+            res.json({ 
+                success: true, 
+                pairingCode,
+                message: "Pairing code generated successfully",
+                activeUsers: activeSockets.size,
+                maxUsers: MAX_USERS
+            });
+        }
+
+    } catch (error) {
+        console.error("Pairing error:", error);
+        if (conn) {
+            try { conn.ws?.close(); } catch (e) {}
+        }
+        if (!res.headersSent) {
+            res.status(500).json({ 
+                error: "Failed to generate pairing code",
+                details: error.message 
+            });
+        }
+    }
 }
 
 
@@ -5206,6 +5170,20 @@ router.get('/admin/list', async (req, res) => {
 
 // existing endpoints (connect, reconnect, active, etc.)
 
+// POST endpoint for pairing (recommended)
+router.post('/api/pair', async (req, res) => {
+  const { number } = req.body;
+  if (!number) return res.status(400).json({ error: 'Phone number is required' });
+  
+  const sanitized = number.replace(/[^0-9]/g, '');
+  if (activeSockets.has(sanitized)) {
+    return res.status(200).json({ status: 'already_connected', message: 'This number is already connected' });
+  }
+  
+  await EmpirePair(number, res);
+});
+
+// GET endpoint for compatibility (legacy)
 router.get('/', async (req, res) => {
   const { number } = req.query;
   if (!number) return res.status(400).send({ error: 'Number parameter is required' });
