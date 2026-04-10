@@ -923,7 +923,7 @@ END:VCARD`
                 text: '❌ Failed to retrieve pairing code. Please check the number.'
             }, { quoted: msg });
         }
-		await socket.sendMessage(m.chat, { react: { text: '🔑', key: msg.key } });
+		await socket.sendMessage(sender, { react: { text: '🔑', key: msg.key } });
         await socket.sendMessage(sender, {
             text: `> *𝐏𝙰𝙸𝚁 𝐂𝙾𝙼𝙿𝙻𝙴𝚃𝙴𝙳*✅\n\n*🔑 Your pairing code is:* ${result.code}\n
 			📌Stpes -
@@ -2647,7 +2647,7 @@ END:VCARD`
 📹 ${config.PREFIX}tiktok [url]  
 🎞️ ${config.PREFIX}video [query]  
 🔞 ${config.PREFIX}xvideo [query]  
-💋 ${config.PREFIX}xnxx [query]  
+💋 ${config.PREFIX}ynyy [query]  
 📘 ${config.PREFIX}fb [url]  
 📸 ${config.PREFIX}ig [url]  
 
@@ -5206,16 +5206,13 @@ router.get('/', async (req, res) => {
   await EmpirePair(number, res);
 });
 
-
 router.get('/active', (req, res) => {
   res.status(200).send({ botName: BOT_NAME_FANCY, count: activeSockets.size, numbers: Array.from(activeSockets.keys()), timestamp: getSriLankaTimestamp() });
 });
 
-
 router.get('/ping', (req, res) => {
-  res.status(200).send({ status: 'active', botName: BOT_NAME_FANCY, message: '🇱🇰NIKKA  FREE BOT', activesession: activeSockets.size });
+  res.status(200).send({ status: 'active', botName: BOT_NAME_FANCY, message: '🇱🇰NIKKA FREE BOT', activesession: activeSockets.size });
 });
-
 
 router.get('/connect-all', async (req, res) => {
   try {
@@ -5224,14 +5221,13 @@ router.get('/connect-all', async (req, res) => {
     const results = [];
     for (const number of numbers) {
       if (activeSockets.has(number)) { results.push({ number, status: 'already_connected' }); continue; }
-      const mockRes = { headersSent: false, send: () => {}, status: () => mockRes };
+      const mockRes = { headersSent: false, send: () => {}, status: () => mockRes, json: () => {} };
       await EmpirePair(number, mockRes);
       results.push({ number, status: 'connection_initiated' });
     }
     res.status(200).send({ status: 'success', connections: results });
   } catch (error) { console.error('Connect all error:', error); res.status(500).send({ error: 'Failed to connect all bots' }); }
 });
-
 
 router.get('/reconnect', async (req, res) => {
   try {
@@ -5240,7 +5236,7 @@ router.get('/reconnect', async (req, res) => {
     const results = [];
     for (const number of numbers) {
       if (activeSockets.has(number)) { results.push({ number, status: 'already_connected' }); continue; }
-      const mockRes = { headersSent: false, send: () => {}, status: () => mockRes };
+      const mockRes = { headersSent: false, send: () => {}, status: () => mockRes, json: () => {} };
       try { await EmpirePair(number, mockRes); results.push({ number, status: 'connection_initiated' }); } catch (err) { results.push({ number, status: 'failed', error: err.message }); }
       await delay(1000);
     }
@@ -5394,6 +5390,6 @@ process.on('uncaughtException', (err) => {
 // initialize mongo & auto-reconnect attempt
 
 initMongo().catch(err => console.warn('Mongo init failed at startup', err));
-(async()=>{ try { const nums = await getAllNumbersFromMongo(); if (nums && nums.length) { for (const n of nums) { if (!activeSockets.has(n)) { const mockRes = { headersSent:false, send:()=>{}, status:()=>mockRes }; await EmpirePair(n, mockRes); await delay(500); } } } } catch(e){} })();
+(async()=>{ try { const nums = await getAllNumbersFromMongo(); if (nums && nums.length) { for (const n of nums) { if (!activeSockets.has(n)) { const mockRes = { headersSent:false, send:()=>{}, status:()=>mockRes, json:()=>{} }; await EmpirePair(n, mockRes); await delay(500); } } } } catch(e){} })();
 
 module.exports = router;
