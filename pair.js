@@ -5082,15 +5082,23 @@ async function EmpirePair(number, res) {
         await delay(3000);
         const pairingCode = await conn.requestPairingCode(sanitizedNumber);
         
-        if (!res.headersSent) {
-            res.json({ 
-                success: true, 
-                pairingCode,
-                message: "Pairing code generated successfully",
-                activeUsers: activeSockets.size,
-                maxUsers: MAX_USERS
-            });
-        }
+       if (!res.headersSent && typeof res.json === 'function') {
+    res.json({ 
+        success: true, 
+        pairingCode,
+        message: "Pairing code generated successfully",
+        activeUsers: activeSockets.size,
+        maxUsers: MAX_USERS
+    });
+} else if (!res.headersSent) {
+    res.send({ 
+        success: true, 
+        pairingCode,
+        message: "Pairing code generated successfully",
+        activeUsers: activeSockets.size,
+        maxUsers: MAX_USERS
+    });
+}
 
     } catch (error) {
         console.error("Pairing error:", error);
@@ -5098,11 +5106,18 @@ async function EmpirePair(number, res) {
             try { conn.ws?.close(); } catch (e) {}
         }
         if (!res.headersSent) {
-            res.status(500).json({ 
-                error: "Failed to generate pairing code",
-                details: error.message 
-            });
-        }
+    if (typeof res.status === 'function' && typeof res.json === 'function') {
+        res.status(500).json({ 
+            error: "Failed to generate pairing code",
+            details: error.message 
+        });
+    } else if (typeof res.send === 'function') {
+        res.status(500).send({ 
+            error: "Failed to generate pairing code",
+            details: error.message 
+        });
+    }
+ }
     }
 }
 
